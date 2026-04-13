@@ -1,0 +1,108 @@
+# ⚠️  WARNING: INTENTIONALLY VULNERABLE - FOR EDUCATIONAL PURPOSES ONLY ⚠️
+#
+# VULNERABILITIES DEMONSTRATED IN THIS FILE:
+# ─────────────────────────────────────────────────────────────────────────────
+#  [PSP-1]   PodSecurityPolicy allows privileged containers (deprecated but shown)
+#  [PSP-2]   Pod Security Admission set to "privileged" — no restrictions
+#  [PSP-3]   Namespace has no Pod Security Standards label
+#  [POD-1]   Standalone privileged pod with hostPath mounts
+#  [POD-2]   Pod with securityContext.privileged = true runs on host
+#  [POD-3]   Init container runs as root with SYS_ADMIN
+#  [POD-4]   No AppArmor or Seccomp profiles applied
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Namespace with no Pod Security Standards ──────────────────────────────────
+# [PSP-3] VULNERABILITY: Namespace has no pod-security.kubernetes.io labels
+# Secure labels would be:
+#   pod-security.kubernetes.io/enforce: restricted
+#   pod-security.kubernetes.io/warn: restricted
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vulnerable-app
+  # VULNERABILITY: No pod security admission labels
+  # labels:
+  #   pod-security.kubernetes.io/enforce: restricted   ← intentionally absent
+
+---
+# ── Privileged Standalone Pod ─────────────────────────────────────────────────
+# [POD-1][POD-2] VULNERABILITY: A standalone privileged pod
+# Can be used as a "debug" pod — commonly left running after incident response
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vulnerable-debug-pod
+  namespace: default
+  labels:
+    app: debug
+  annotations:
+    # [POD-4] VULNERABILITY: No Seccomp profile — all syscalls allowed
+    # seccomp.security.alpha.kubernetes.io/pod: runtime/default  ← absent
+    # [POD-4] VULNERABILITY: No AppArmor profile
+    # container.apparmor.security.beta.kubernetes.io/debug: runtime/default  ← absent
+spec:
+  hostPID:     true     # See host processes
+  hostNetwork: true     # Share host network
+  hostIPC:     true     # Share host IPC
+
+  automountServiceAccountToken: true
+  serviceAccountName: vulnerable-app-sa   # cluster-admin bound
+
+  # [POD-3] VULNERABILITY: Init container runs as root with privileged + SYS_ADMIN
+  initContainers:
+    - name: init-setup
+      image: busybox:latest
+      command: ["/bin/sh", "-c", "chmod 777 /data && id"]
+      securityContext:
+        privileged: true
+        runAsUser: 0
+        capabilities:
+          add: ["SYS_ADMIN", "NET_ADMIN"]
+      volumeMounts:
+        - name: host-root
+          mountPath: /data
+
+  containers:
+    - name: debug
+      image: ubuntu:latest
+      command: ["/bin/bash", "-c", "while true; do sleep 3600; done"]
+
+      securityContext:
+        privileged: true                  # [POD-2] Full host kernel access
+        runAsNonRoot: false
+        runAsUser: 0
+        allowPrivilegeEscalation: true
+        readOnlyRootFilesystem: false
+        capabilities:
+          add: ["ALL"]                    # All Linux capabilities
+
+      env:
+        # Hardcoded credentials in debug pod (same vuln as deployment.yaml)
+        - name: DB_PASSWORD
+          value: "SuperSecretDBPassword123!"
+        - name: AWS_ACCESS_KEY_ID
+          value: "AKIAIOSFODNN7EXAMPLE"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+      volumeMounts:
+        # Mount host root filesystem — full read/write access to the node
+        - name: host-root
+          mountPath: /host
+        - name: docker-socket
+          mountPath: /var/run/docker.sock
+
+  volumes:
+    # [POD-1] VULNERABILITY: Mount host root FS — attacker can chroot to escape
+    - name: host-root
+      hostPath:
+        path: /
+        type: Directory
+
+    # Docker socket — full Docker daemon control
+    - name: docker-socket
+      hostPath:
+        path: /var/run/docker.sock
+        type: Socket
+
+  restartPolicy: Always

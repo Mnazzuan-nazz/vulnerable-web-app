@@ -1,0 +1,11 @@
+# ⚠️ NOTE: In a real application, .env and db/*.db would be gitignored.
+# For this EDUCATIONAL project, they are intentionally committed
+# to demonstrate what happens when secrets are in version control.
+
+node_modules/
+npm-debug.log*
+
+# Intentionally NOT ignoring for demo purposes:
+# .env          ← Contains exposed secrets (intentional)
+# db/*.db       ← SQLite database (intentional)
+# config/secrets.js ← Hardcoded credentials (intentional)

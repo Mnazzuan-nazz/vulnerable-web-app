@@ -1,0 +1,96 @@
+# ⚠️  WARNING: INTENTIONALLY VULNERABLE - FOR EDUCATIONAL PURPOSES ONLY ⚠️
+#
+# VULNERABILITIES DEMONSTRATED IN THIS FILE:
+# ─────────────────────────────────────────────────────────────────────────────
+#  [SVC-1]   Service type LoadBalancer with no source IP restriction
+#  [SVC-2]   Node debugger port (9229) exposed via LoadBalancer to internet
+#  [SVC-3]   SSH port (22) exposed via LoadBalancer
+#  [SVC-4]   externalTrafficPolicy: Cluster — hides real client IP
+#  [SVC-5]   No NetworkPolicy restricting inbound traffic to the service
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Main Application Service ───────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: vulnerable-app-service
+  namespace: default
+  annotations:
+    # [SVC-1] VULNERABILITY: No load balancer source IP restrictions
+    # service.beta.kubernetes.io/aws-load-balancer-source-ranges: "0.0.0.0/0"
+    service.beta.kubernetes.io/aws-load-balancer-type: "external"
+spec:
+  selector:
+    app: vulnerable-app
+
+  # [SVC-1] VULNERABILITY: LoadBalancer type exposes all ports to the internet
+  type: LoadBalancer
+
+  # [SVC-4] VULNERABILITY: Cluster policy hides real client IPs (complicates audit/ban)
+  externalTrafficPolicy: Cluster
+
+  ports:
+    # Application port
+    - name: http
+      port: 80
+      targetPort: 3000
+      protocol: TCP
+
+    # Application HTTPS (no TLS termination — serving plain HTTP on 443)
+    - name: https
+      port: 443
+      targetPort: 3000
+      protocol: TCP
+
+    # [SVC-3] VULNERABILITY: SSH port exposed to the internet via LoadBalancer
+    - name: ssh
+      port: 22
+      targetPort: 22
+      protocol: TCP
+
+    # [SVC-2] VULNERABILITY: Node.js debugger exposed to the internet
+    # Anyone who reaches this port gets full REPL access (arbitrary code execution)
+    - name: node-debugger
+      port: 9229
+      targetPort: 9229
+      protocol: TCP
+
+---
+# ── Database Service (also exposed externally — should be ClusterIP only) ──────
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: default
+spec:
+  selector:
+    app: postgres
+
+  # VULNERABILITY: Database exposed as LoadBalancer (should be ClusterIP)
+  type: LoadBalancer
+
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+
+---
+# ── Redis Service (no auth, exposed externally) ───────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: default
+spec:
+  selector:
+    app: redis
+
+  # VULNERABILITY: Redis with no password exposed externally
+  type: LoadBalancer
+
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+      protocol: TCP

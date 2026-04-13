@@ -1,0 +1,100 @@
+# ⚠️  WARNING: INTENTIONALLY VULNERABLE - FOR EDUCATIONAL PURPOSES ONLY ⚠️
+#
+# VULNERABILITIES DEMONSTRATED IN THIS FILE:
+# ─────────────────────────────────────────────────────────────────────────────
+#  [RBAC-1]  ClusterRoleBinding to cluster-admin — wildcard access to everything
+#  [RBAC-2]  ServiceAccount bound to cluster-admin role
+#  [RBAC-3]  ClusterRole with wildcard verbs on all resources
+#  [RBAC-4]  ClusterRole allows creating/modifying RBAC roles (privilege escalation)
+#  [RBAC-5]  ClusterRole allows exec into any pod (lateral movement)
+#  [RBAC-6]  ClusterRole allows reading all secrets cluster-wide
+#  [RBAC-7]  Default service account used (should be dedicated per-workload SA)
+#  [RBAC-8]  Role allows impersonating any user/group (authentication bypass)
+#
+# Triggers: Checkov, Polaris, kube-score, KubiScan
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Service Account ────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vulnerable-app-sa
+  namespace: default
+  # [K8S-16] automountServiceAccountToken defaults to true — token auto-mounted
+  # automountServiceAccountToken: false  ← intentionally absent
+
+---
+# ── ClusterRole with Wildcard Permissions ─────────────────────────────────────
+# [RBAC-3] VULNERABILITY: All verbs on all resources
+# This is effectively equivalent to cluster-admin
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vulnerable-app-clusterrole
+rules:
+  # [RBAC-3] VULNERABILITY: Wildcard resource + wildcard verb
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs:     ["*"]
+
+  # [RBAC-6] VULNERABILITY: Explicit secrets access (belt-and-suspenders)
+  # Can read all Secrets in all namespaces → all credentials cluster-wide
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs:     ["get", "list", "watch", "create", "update", "delete"]
+
+  # [RBAC-5] VULNERABILITY: exec into any pod → lateral movement
+  - apiGroups: [""]
+    resources: ["pods/exec", "pods/attach", "pods/portforward"]
+    verbs:     ["create", "get"]
+
+  # [RBAC-4] VULNERABILITY: Can create/modify RBAC resources → privilege escalation
+  # Attacker can grant themselves cluster-admin via the API
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+    verbs:     ["*"]
+
+  # [RBAC-8] VULNERABILITY: User impersonation — bypass authentication entirely
+  - apiGroups: [""]
+    resources: ["users", "groups", "serviceaccounts"]
+    verbs:     ["impersonate"]
+
+---
+# ── ClusterRoleBinding: vulnerable-app-sa → cluster-admin ─────────────────────
+# [RBAC-1][RBAC-2] VULNERABILITY: Application service account bound to cluster-admin
+# If the app is compromised, the attacker inherits full cluster control:
+#   - Read/write all secrets in all namespaces
+#   - Exec into any pod
+#   - Create privileged pods to escape to the host
+#   - Exfiltrate all workloads, configs, and credentials
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vulnerable-app-cluster-admin-binding
+subjects:
+  - kind: ServiceAccount
+    name: vulnerable-app-sa
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin          # [RBAC-1] VULNERABILITY: Binding to built-in cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ── Also bind to the custom overly-permissive role ────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vulnerable-app-custom-binding
+subjects:
+  - kind: ServiceAccount
+    name: vulnerable-app-sa
+    namespace: default
+  # [RBAC-7] VULNERABILITY: Default service account also bound
+  - kind: ServiceAccount
+    name: default
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: vulnerable-app-clusterrole
+  apiGroup: rbac.authorization.k8s.io

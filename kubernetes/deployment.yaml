@@ -1,0 +1,181 @@
+# ⚠️  WARNING: INTENTIONALLY VULNERABLE - FOR EDUCATIONAL PURPOSES ONLY ⚠️
+#
+# VULNERABILITIES DEMONSTRATED IN THIS FILE:
+# ─────────────────────────────────────────────────────────────────────────────
+#  [K8S-1]   Container runs as root (runAsNonRoot: false / no securityContext)
+#  [K8S-2]   privileged: true — container has full host kernel access
+#  [K8S-3]   allowPrivilegeEscalation: true
+#  [K8S-4]   hostPID: true — container sees all host processes
+#  [K8S-5]   hostNetwork: true — container shares host network stack
+#  [K8S-6]   hostIPC: true — container shares host IPC namespace
+#  [K8S-7]   Dangerous capabilities added: SYS_ADMIN, NET_ADMIN, ALL
+#  [K8S-8]   readOnlyRootFilesystem: false — writable root FS
+#  [K8S-9]   No resource limits (CPU/memory) — DoS possible
+#  [K8S-10]  No liveness/readiness probes
+#  [K8S-11]  Hardcoded secrets in env (not from Secrets)
+#  [K8S-12]  Docker socket mounted as hostPath volume
+#  [K8S-13]  Host /etc mounted into container
+#  [K8S-14]  Image tag: latest (non-deterministic)
+#  [K8S-15]  imagePullPolicy: Always with latest tag
+#  [K8S-16]  automountServiceAccountToken: true (default) — SSRF → k8s API
+#  [K8S-17]  No Pod Disruption Budget
+#  [K8S-18]  Node debugger port (9229) exposed
+#
+# Triggers: Checkov, Trivy config scan, Kubesec, Polaris, kube-score
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vulnerable-app
+  namespace: default
+  labels:
+    app: vulnerable-app
+    environment: production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vulnerable-app
+  template:
+    metadata:
+      labels:
+        app: vulnerable-app
+    spec:
+      # [K8S-4] VULNERABILITY: Container can see (and signal) ALL host processes
+      hostPID: true
+
+      # [K8S-5] VULNERABILITY: Container shares the host's network interfaces
+      # Can sniff all traffic on the node, bind to any host port
+      hostNetwork: true
+
+      # [K8S-6] VULNERABILITY: Shared IPC namespace → shared memory attacks
+      hostIPC: true
+
+      # [K8S-16] VULNERABILITY: Service account token auto-mounted
+      # An SSRF vulnerability can use the token to call the Kubernetes API
+      automountServiceAccountToken: true
+
+      # Bind to cluster-admin service account (see rbac.yaml)
+      serviceAccountName: vulnerable-app-sa
+
+      containers:
+        - name: vulnerable-app
+          # [K8S-14] VULNERABILITY: Unpinned latest tag
+          image: vulnerable-web-app:latest
+          # [K8S-15] VULNERABILITY: Always pull — no cache, non-deterministic
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 3000
+              name: http
+            # [K8S-18] VULNERABILITY: Node debugger port exposed
+            - containerPort: 9229
+              name: debugger
+            # SSH port exposed inside cluster
+            - containerPort: 22
+              name: ssh
+
+          # ── Security Context ────────────────────────────────────────────────
+          securityContext:
+            # [K8S-2] VULNERABILITY: Full host kernel access
+            privileged: true
+
+            # [K8S-3] VULNERABILITY: Child processes can gain more privileges than parent
+            allowPrivilegeEscalation: true
+
+            # [K8S-1] VULNERABILITY: Running as root UID 0
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+
+            # [K8S-8] VULNERABILITY: Writable root filesystem
+            # Attacker can modify binaries, configs, and cron jobs on the container FS
+            readOnlyRootFilesystem: false
+
+            # [K8S-7] VULNERABILITY: Dangerous Linux capabilities
+            capabilities:
+              add:
+                - SYS_ADMIN    # Mount filesystems, manage namespaces, bypass DAC
+                - NET_ADMIN    # Modify network interfaces, firewall rules, routing
+                - SYS_PTRACE   # Trace/read memory of any process
+                - SYS_MODULE   # Load/unload kernel modules
+                - DAC_OVERRIDE # Override all file permission checks
+                - SETUID       # Arbitrary UID switching
+                - SETGID       # Arbitrary GID switching
+                - ALL          # All capabilities (supersedes everything above)
+
+          # ── Environment Variables ───────────────────────────────────────────
+          env:
+            # [K8S-11] VULNERABILITY: Secrets hardcoded directly in env block
+            # Should use secretKeyRef pointing to a Kubernetes Secret
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "3000"
+            - name: DB_PASSWORD
+              value: "SuperSecretDBPassword123!"     # Hardcoded DB password
+            - name: JWT_SECRET
+              value: "secret"                       # Weak, hardcoded JWT secret
+            - name: AWS_ACCESS_KEY_ID
+              value: "AKIAIOSFODNN7EXAMPLE"          # Hardcoded AWS key
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+            - name: STRIPE_SECRET_KEY
+              value: "sk_live_51H2QwertyuiopASDFGHJKLzxcvbnmQWERTYUIOP1234"
+            - name: GITHUB_TOKEN
+              value: "ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789AB"
+            - name: SLACK_BOT_TOKEN
+              value: "xoxb-1234567890-1234567890123-aBcDeFgHiJkLmNoPqRsTuVwXy"
+            # [K8S-18] VULNERABILITY: Enable Node debugger on all interfaces
+            - name: NODE_OPTIONS
+              value: "--inspect=0.0.0.0:9229"
+
+          # ── Resource Limits ─────────────────────────────────────────────────
+          # [K8S-9] VULNERABILITY: No resource requests or limits
+          # A single ReDoS request can starve all other pods on the node
+          # resources:
+          #   requests:
+          #     memory: "128Mi"
+          #     cpu: "100m"
+          #   limits:
+          #     memory: "512Mi"
+          #     cpu: "500m"
+
+          # ── Probes ──────────────────────────────────────────────────────────
+          # [K8S-10] VULNERABILITY: No liveness or readiness probes
+          # livenessProbe:  ← intentionally absent
+          # readinessProbe: ← intentionally absent
+
+          # ── Volume Mounts ────────────────────────────────────────────────────
+          volumeMounts:
+            # [K8S-12] VULNERABILITY: Docker socket → full Docker daemon control
+            - name: docker-socket
+              mountPath: /var/run/docker.sock
+
+            # [K8S-13] VULNERABILITY: Host /etc mounted — read /etc/shadow, /etc/sudoers
+            - name: host-etc
+              mountPath: /host/etc
+
+            # Host /proc mounted — read host process info, kernel params
+            - name: host-proc
+              mountPath: /host/proc
+
+      # ── Volumes ──────────────────────────────────────────────────────────────
+      volumes:
+        # [K8S-12] VULNERABILITY: Docker socket hostPath
+        - name: docker-socket
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+
+        # [K8S-13] VULNERABILITY: Host filesystem mounts
+        - name: host-etc
+          hostPath:
+            path: /etc
+            type: Directory
+
+        - name: host-proc
+          hostPath:
+            path: /proc
+            type: Directory

@@ -1,0 +1,233 @@
+# ⚠️  WARNING: INTENTIONALLY VULNERABLE - FOR EDUCATIONAL PURPOSES ONLY ⚠️
+#
+# VULNERABILITIES DEMONSTRATED IN THIS FILE:
+# ─────────────────────────────────────────────────────────────────────────────
+#  [SECR-1]  Hardcoded secrets in plain environment variables
+#  [SECR-2]  AWS credentials in compose file (committed to VCS)
+#  [PRIV-1]  privileged: true — container has full host kernel access
+#  [PRIV-2]  user: root explicitly set
+#  [PRIV-3]  SYS_ADMIN, NET_ADMIN capabilities added
+#  [PRIV-4]  securityContext.readOnlyRootFilesystem: false (default, not enforced)
+#  [NET-1]   All ports bound to 0.0.0.0 (all interfaces, not just localhost)
+#  [NET-2]   SSH port 22 exposed externally
+#  [NET-3]   Node debugger port 9229 exposed externally
+#  [NET-4]   Database port 5432 exposed externally (should be internal only)
+#  [NET-5]   Redis port 6379 exposed externally with no auth
+#  [NET-6]   No network segmentation — all services on same network
+#  [VOL-1]   Docker socket mounted — full Docker daemon access from container
+#  [VOL-2]   Host /etc mounted into container
+#  [VOL-3]   Host /var/run/docker.sock mounted
+#  [HLTH-1]  No healthchecks defined on any service
+#  [RES-1]   No memory/CPU limits — DoS possible
+#  [DB-1]    Database root password hardcoded and weak
+#  [DB-2]    Redis has no password (requirepass not set)
+#  [DB-3]    PostgreSQL accessible on all interfaces
+#  [MISC-1]  restart: always without circuit-breaker pattern
+#
+# Triggers: Checkov, Trivy, Snyk IaC, KICS
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: '3.8'
+
+services:
+
+  # ── Application ──────────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # [SECR-1] VULNERABILITY: Build-time secrets in compose file
+        DB_PASSWORD: SuperSecretDBPassword123!
+        JWT_SECRET: secret
+        AWS_ACCESS_KEY_ID: AKIAIOSFODNN7EXAMPLE
+        AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+
+    container_name: vulnerable-app
+
+    # [PRIV-2] VULNERABILITY: Explicit root user
+    user: root
+
+    # [PRIV-1] VULNERABILITY: privileged mode gives container full host kernel access
+    # Equivalent to running the container as root on the host
+    # Allows: mounting host filesystems, loading kernel modules, modifying iptables
+    privileged: true
+
+    # [PRIV-3] VULNERABILITY: Extra Linux capabilities
+    cap_add:
+      - SYS_ADMIN      # Mount filesystems, bypass DAC, manage namespaces
+      - NET_ADMIN      # Modify network interfaces, routing, firewall rules
+      - SYS_PTRACE     # Trace arbitrary processes (read their memory)
+      - SYS_MODULE     # Load/unload kernel modules
+      - DAC_OVERRIDE   # Override file permission checks
+      - SETUID         # Set arbitrary user IDs
+      - SETGID         # Set arbitrary group IDs
+      - ALL            # All capabilities (includes everything above)
+
+    # [NET-1] VULNERABILITY: All ports bound to 0.0.0.0
+    # 3000  → App (acceptable if intentional)
+    # 22    → SSH into container from the internet
+    # 9229  → Node.js debugger — full REPL = arbitrary code execution
+    ports:
+      - "0.0.0.0:3000:3000"
+      - "0.0.0.0:22:22"
+      - "0.0.0.0:9229:9229"
+
+    environment:
+      # [SECR-1] VULNERABILITY: All secrets in plaintext environment block
+      NODE_ENV: production
+      PORT: "3000"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: vulnerable_app
+      DB_USER: admin
+      DB_PASSWORD: SuperSecretDBPassword123!       # Hardcoded DB password
+      JWT_SECRET: secret                           # Weak JWT secret
+      SESSION_SECRET: session-secret-hardcoded     # Hardcoded session secret
+      # [SECR-2] VULNERABILITY: AWS credentials in compose file
+      AWS_ACCESS_KEY_ID: AKIAIOSFODNN7EXAMPLE
+      AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+      AWS_REGION: us-east-1
+      STRIPE_SECRET_KEY: sk_live_51H2QwertyuiopASDFGHJKLzxcvbnmQWERTYUIOP1234
+      GITHUB_TOKEN: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789AB
+      SENDGRID_API_KEY: SG.aBcDeFgHiJkLmNoPq.RsTuVwXyZ0123456789ABCDEFGHIJKLM
+      SLACK_BOT_TOKEN: xoxb-1234567890-1234567890123-aBcDeFgHiJkLmNoPqRsTuVwXy
+      REDIS_URL: redis://redis:6379            # No auth on Redis
+      NODE_OPTIONS: --inspect=0.0.0.0:9229    # [NET-3] Debugger on all interfaces
+
+    volumes:
+      # [VOL-1] VULNERABILITY: Docker socket mounted → container can control Docker daemon
+      # An attacker inside the container can: spin up privileged containers,
+      # mount host filesystem, escape to host
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # [VOL-2] VULNERABILITY: Host /etc mounted read-write
+      # Attacker can modify /etc/passwd, /etc/shadow, /etc/sudoers
+      - /etc:/host/etc:rw
+
+      # [VOL-3] VULNERABILITY: Host /tmp mounted (useful for privilege escalation)
+      - /tmp:/host/tmp:rw
+
+      # App files (acceptable but combined with above it's dangerous)
+      - .:/app
+
+    # [RES-1] VULNERABILITY: No resource limits
+    # A ReDoS or infinite loop crashes the entire host
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 512m
+    #       cpus: '0.5'
+
+    depends_on:
+      - postgres
+      - redis
+
+    # [MISC-1] VULNERABILITY: restart: always with no backoff
+    restart: always
+
+    networks:
+      - app-network   # [NET-6] All services on same flat network
+
+    # [HLTH-1] VULNERABILITY: No healthcheck
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+    #   interval: 30s
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
+  postgres:
+    # [IMG-1] VULNERABILITY: Unpinned latest tag
+    image: postgres:latest
+
+    container_name: vulnerable-postgres
+
+    # [PRIV-2] VULNERABILITY: Running as root
+    user: root
+
+    environment:
+      # [DB-1] VULNERABILITY: Weak, hardcoded DB credentials
+      POSTGRES_DB: vulnerable_app
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: SuperSecretDBPassword123!
+      POSTGRES_ROOT_PASSWORD: root
+
+    # [NET-4] VULNERABILITY: DB port exposed to all interfaces
+    # Should be: "127.0.0.1:5432:5432" or removed entirely (internal only)
+    ports:
+      - "0.0.0.0:5432:5432"
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+      # [VOL-2] VULNERABILITY: Host /etc mounted into DB container
+      - /etc:/host/etc:ro
+
+    networks:
+      - app-network
+
+    restart: always
+
+    # [HLTH-1] VULNERABILITY: No healthcheck
+
+  # ── Redis ─────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:latest     # [IMG-1] Unpinned tag
+
+    container_name: vulnerable-redis
+
+    # [DB-2] VULNERABILITY: Redis with no password (--requirepass not set)
+    # Anyone who can reach port 6379 has full read/write access
+    command: redis-server --loglevel verbose
+    # Secure command would be: redis-server --requirepass "strongpassword" --loglevel notice
+
+    # [NET-5] VULNERABILITY: Redis exposed to all interfaces
+    ports:
+      - "0.0.0.0:6379:6379"
+
+    networks:
+      - app-network
+
+    restart: always
+
+    # [HLTH-1] VULNERABILITY: No healthcheck
+
+  # ── Adminer (DB Admin UI) ─────────────────────────────────────────────────────
+  adminer:
+    image: adminer:latest   # [IMG-1] Unpinned tag
+
+    container_name: vulnerable-adminer
+
+    # VULNERABILITY: DB management UI exposed publicly with no auth layer
+    # Combined with the hardcoded DB credentials, anyone can browse the database
+    ports:
+      - "0.0.0.0:8080:8080"
+
+    networks:
+      - app-network
+
+    environment:
+      # Auto-login to the vulnerable DB (no password prompt)
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: pepa-linha
+
+    restart: always
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  app-network:
+    driver: bridge
+    # [NET-6] VULNERABILITY: No network segmentation
+    # All services (app, DB, Redis, admin panel) share the same network
+    # A compromised app container can directly reach the DB and Redis
+    #
+    # Secure design: separate networks per tier
+    # networks:
+    #   frontend:   (app only)
+    #   backend:    (app + db)
+    #   data:       (db + redis, internal only)
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  postgres-data:
+    driver: local
+    # VULNERABILITY: No encryption at rest for database volume

@@ -1,0 +1,31 @@
+# ⚠️  WARNING: INTENTIONALLY VULNERABLE - FOR EDUCATIONAL PURPOSES ONLY ⚠️
+#
+# VULNERABILITY: Inadequate .dockerignore
+# ─────────────────────────────────────────────────────────────────────────────
+# A proper .dockerignore should exclude ALL of the following.
+# This file intentionally leaves secrets, keys, and dev artifacts exposed
+# so they get copied into the Docker image — demonstrating what NOT to do.
+#
+# Missing exclusions (intentionally):
+#   .env                  → All hardcoded API keys / DB passwords
+#   config/secrets.js     → Hardcoded credentials source file
+#   db/*.db               → SQLite database with PII
+#   *.pem / *.key         → Any TLS/SSH private keys
+#   .git/                 → Full git history (may contain leaked secrets)
+#   test/ / *.test.js     → Test files with fixture credentials
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Only excluding node_modules to keep image size manageable
+node_modules/
+npm-debug.log*
+
+# INTENTIONALLY NOT EXCLUDED (vulnerable):
+# .env
+# .git
+# config/secrets.js
+# db/*.db
+# *.pem
+# *.key
+# *.p12
+# coverage/
+# .nyc_output/

@@ -1,0 +1,99 @@
+# ⚠️  WARNING: INTENTIONALLY VULNERABLE - FOR EDUCATIONAL PURPOSES ONLY ⚠️
+#
+# VULNERABILITIES DEMONSTRATED IN THIS FILE:
+# ─────────────────────────────────────────────────────────────────────────────
+#  [NP-1]   NetworkPolicy allows all ingress from 0.0.0.0/0
+#  [NP-2]   NetworkPolicy allows all egress to 0.0.0.0/0
+#  [NP-3]   No default-deny NetworkPolicy in the namespace
+#  [NP-4]   Database pod reachable from all pods (no tier isolation)
+#  [NP-5]   Redis pod reachable from all pods without restriction
+#
+# In a secure design:
+#   - Default-deny all ingress and egress
+#   - App pod: ingress from ingress-controller only, egress to DB/Redis only
+#   - DB pod: ingress from app pod only, no egress
+#   - Redis pod: ingress from app pod only, no egress
+#
+# Triggers: Checkov (CKV_K8S_7), Polaris
+# ─────────────────────────────────────────────────────────────────────────────
+
+# [NP-3] VULNERABILITY: No default-deny policy
+# Without a default-deny, all pod-to-pod communication is allowed by default.
+# The correct first policy in any namespace should be:
+#
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: default-deny-all
+#   namespace: default
+# spec:
+#   podSelector: {}          # matches all pods
+#   policyTypes:
+#     - Ingress
+#     - Egress
+#
+# ← intentionally absent
+
+---
+# [NP-1][NP-2] VULNERABILITY: Permissive "allow-all" NetworkPolicy
+# This policy explicitly allows all traffic in and out — worse than no policy
+# because it also overrides any more-restrictive policies in some CNI plugins
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-all-ingress-egress
+  namespace: default
+spec:
+  podSelector: {}    # Applies to ALL pods in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # [NP-1] VULNERABILITY: Allow all ingress from anywhere
+    - {}             # Empty rule = allow from all sources
+  egress:
+    # [NP-2] VULNERABILITY: Allow all egress to anywhere
+    - {}             # Empty rule = allow to all destinations
+
+---
+# [NP-4] VULNERABILITY: Database reachable from every pod in the cluster
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-open-policy
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allows any pod in any namespace to reach the database
+    - from:
+        - namespaceSelector: {}   # All namespaces
+          podSelector: {}         # All pods
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+# [NP-5] VULNERABILITY: Redis reachable from every pod (no auth + open network)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-open-policy
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
