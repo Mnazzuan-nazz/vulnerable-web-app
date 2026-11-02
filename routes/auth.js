@@ -57,16 +57,16 @@ router.post('/login', (req, res) => {
   // Payload: username = admin' --      (bypasses password check entirely)
   // Payload: username = ' OR '1'='1   (returns first user in table)
   const query = `
-    SELECT *
-    FROM   users
-    WHERE  username = '${username}'
-    AND    password = '${hashedPassword}'
-  `;
+  SELECT *
+  FROM   users
+  WHERE  username = ?
+  AND    password = ?
+`;
 
   // [DISC-1] VULNERABILITY: Query string logged to console
   console.log('[LOGIN] Executing query:', query);
 
-  db.get(query, (err, user) => {
+  db.get(query, [username, hashedPassword], (err, user) => {
     if (err) {
       // [DISC-1] VULNERABILITY: Raw database error + full query returned to client
       return res.status(500).json({
