@@ -24,7 +24,7 @@ const database = {
   port: 5432,
   name: 'vulnerable_app',
   username: 'admin',
-  password: 'SuperSecretDBPassword123!',         // HARDCODED DB PASSWORD
+  password: process.env.DB_PASSWORD,         // HARDCODED DB PASSWORD
   rootPassword: 'root',                          // HARDCODED ROOT PASSWORD
   connectionString: 'postgresql://admin:SuperSecretDBPassword123!@localhost:5432/vulnerable_app'
 };
@@ -54,8 +54,8 @@ const jwt = {
 // Format: AKIA[A-Z0-9]{16} — matches AWS key pattern
 // ─────────────────────────────────────────────
 const aws = {
-  accessKeyId: 'AKIAIOSFODNN7EXAMPLE',                        // AWS ACCESS KEY ID
-  secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY', // AWS SECRET KEY
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,                        // AWS ACCESS KEY ID
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY, // AWS SECRET KEY
   region: 'us-east-1',
   s3Bucket: 'vulnerable-app-prod-bucket',
   accountId: '123456789012',
